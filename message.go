@@ -73,6 +73,6 @@ type response struct {
 	ID     int
 	Method string
 	Params KeyValue
-	Result KeyValue
+	Result json.RawMessage
 	Error  KeyValue
 }

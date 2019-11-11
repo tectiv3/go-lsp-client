@@ -102,7 +102,7 @@ func (p *lspClient) processMessage(r *response) {
 	} else if r.Method == "serenata/didProgressIndexing" {
 		Log.Info(r.Params["info"])
 	} else {
-		Log.WithField("method", r.Method).WithField("params", r.Params).Debug(r.Result)
+		Log.WithField("method", r.Method).WithField("params", r.Params).Trace(string(r.Result))
 		p.responseChan <- r
 	}
 }
@@ -149,7 +149,7 @@ func (p *lspClient) receive() *response {
 
 			response := response{}
 			if err := json.Unmarshal(buf, &response); err != nil {
-				Log.WithField("str", string(buf)).Warn(string(buf))
+				Log.WithField("err", err).Warn(string(buf))
 			}
 			return &response
 		}

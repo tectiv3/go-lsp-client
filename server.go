@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"time"
 
@@ -72,7 +73,7 @@ func (s *mateServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	tr, _ := json.Marshal(result)
-	Log.Trace(string(tr))
+	Log.WithField("method", mr.Method).Debug(string(tr))
 	json.NewEncoder(w).Encode(result)
 }
 
@@ -88,14 +89,14 @@ func (s *mateServer) requestAndWait(method string, params interface{}, cb kvChan
 		cb <- &KeyValue{"result": payload[0]}
 	}
 
-	events.Once("request."+string(reqID), listener)
+	events.Once("request."+strconv.Itoa(reqID), listener)
 	s.client.request(reqID, method, params)
 
 	// block until got response or timeout
 	select {
 	case <-timer.C:
 		timer.Stop()
-		events.RemoveListener("request."+string(reqID), listener)
+		events.RemoveListener("request."+strconv.Itoa(reqID), listener)
 		cb <- &KeyValue{"result": "error", "message": method + " request time out"}
 		return
 	default:
@@ -105,7 +106,7 @@ func (s *mateServer) requestAndWait(method string, params interface{}, cb kvChan
 
 func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 	defer s.handlePanic(mr)
-	Log.WithField("method", mr.Method).Info(string(mr.Body))
+	Log.WithField("method", mr.Method).Trace(string(mr.Body))
 	switch mr.Method {
 	case "hover":
 		params := TextDocumentPositionParams{}
@@ -159,6 +160,9 @@ func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 			s.initialized = true
 			events.RemoveListener("initialized", listener)
 			s.client.notification("initialized", KeyValue{}) // notify server that we are ready
+			s.client.notification("workspace/didChangeConfiguration", DidChangeConfigurationParams{
+				KeyValue{"intelephense.files.maxSize": 3000000},
+			})
 			cb <- &KeyValue{"result": "ok"}
 			return
 		default:
@@ -176,9 +180,9 @@ func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 			cb <- &KeyValue{"result": "error", "message": "Invalid document uri"}
 			return
 		}
-		s.client.notification("textDocument/didClose", TextDocumentIdentifier{
+		s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
 			DocumentURI(fn),
-		})
+		}})
 		s.client.notification("textDocument/didOpen", DidOpenTextDocumentParams{textDocument})
 		cb <- &KeyValue{"result": "ok"}
 	default:
@@ -188,14 +192,20 @@ func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 
 func (s *mateServer) startListeners() {
 	defer s.handlePanic(mateRequest{})
+
+	events.Once("request.1", func(event string, payload ...interface{}) {
+		s.client.notification("initialized", KeyValue{})
+		s.client.notification("workspace/didChangeConfiguration", DidChangeConfigurationParams{
+			KeyValue{"intelephense.files.maxSize": 3000000},
+		})
+		events.Emit("initialized")
+	})
+
 	for {
 		select {
 		case r := <-s.client.responseChan:
-			events.Emit("request."+string(r.ID), r.Result)
-			if _, ok := r.Result["capabilities"]; ok {
-				s.client.notification("initialized", KeyValue{})
-				events.Emit("initialized")
-			}
+			Log.WithField("id", r.ID).WithField("r", r).Trace(string(r.Result))
+			events.Emit("request."+strconv.Itoa(r.ID), r.Result)
 		}
 	}
 }
@@ -207,12 +217,13 @@ func (s mateServer) initialize(params KeyValue) error {
 	}
 	storagePath := params.string("storage", "/tmp/intelephense/")
 
-	s.client.request(0, "initialize", InitializeParams{
+	s.client.request(1, "initialize", InitializeParams{
 		ProcessID: os.Getpid(),
 		RootURI:   DocumentURI("file://" + dir),
 		RootPath:  dir,
 		InitializationOptions: KeyValue{
-			"storagePath": storagePath,
+			"storagePath":   storagePath,
+			"files.maxSize": 3000000,
 		},
 		Capabilities: KeyValue{
 			"textDocument": KeyValue{
@@ -221,20 +232,26 @@ func (s mateServer) initialize(params KeyValue) error {
 					"willSaveWaitUntil": true,
 				},
 				"completion": KeyValue{
+					"dynamicRegistration": true,
+					"contextSupport":      true,
 					"completionItem": KeyValue{
 						"snippetSupport":          true,
 						"commitCharactersSupport": true,
 						"documentationFormat":     []string{"markdown", "plaintext"},
+						"deprecatedSupport":       true,
+						"preselectSupport":        true,
 					},
 				},
 				"hover": KeyValue{
-					"contentFormat": []string{"markdown", "plaintext"},
+					"dynamicRegistration": true,
+					"contentFormat":       []string{"markdown", "plaintext"},
 				},
 			},
 
 			"workspace": KeyValue{
 				"applyEdit":              true,
-				"didChangeConfiguration": KeyValue{},
+				"didChangeConfiguration": KeyValue{"dynamicRegistration": true},
+				"configuration":          true,
 				"executeCommand":         KeyValue{},
 				"symbol": KeyValue{
 					"symbolKind": KeyValue{
@@ -255,7 +272,7 @@ func (s mateServer) handlePanic(mr mateRequest) {
 
 func startServer(client *lspClient, port string) {
 	Log.Info("Running webserver on port " + port)
-	server := mateServer{client: client, requestID: 0, initialized: false}
+	server := mateServer{client: client, requestID: 1, initialized: false}
 	go server.startListeners()
 
 	Log.Fatal(http.ListenAndServe(":"+port, &server))
