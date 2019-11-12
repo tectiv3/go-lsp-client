@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	stdlog "log"
 	"os"
 
@@ -15,7 +16,13 @@ var (
 	version = "master"
 )
 
+var (
+	server   = flag.String("server", "intelephense", `server type (intelephense or phpls), default intelephense`)
+	logLevel = flag.String("level", "debug", `log level, default - debug`)
+)
+
 func init() {
+	flag.Parse()
 	stdlog.SetFlags(0)
 	stdlog.SetOutput(logrus.Writer())
 	logrus.SetReportCaller(true)
@@ -23,7 +30,7 @@ func init() {
 	ctx := context.Background()
 	Log = logrus.WithContext(ctx)
 
-	logrus.Level, _ = log.ParseLevel("debug")
+	logrus.Level, _ = log.ParseLevel(*logLevel)
 	if terminal.IsTerminal(int(os.Stdout.Fd())) {
 		logrus.Formatter = &log.TextFormatter{ForceColors: false, FullTimestamp: true, TimestampFormat: "Jan 2 15:04:05", CallerPrettyfier: callerPrettyfier}
 	} else {
@@ -32,9 +39,16 @@ func init() {
 }
 
 func main() {
-	// "php", []string{userHomeDir+"/.composer/vendor/felixfbecker/language-server/bin/php-language-server.php"}
-	proc := newLspClient(config{true, "intelephense", []string{"--stdio"}})
+	var client *lspClient
+	switch *server {
+	case "phpls":
+		client = newLspClient(config{true, "php", []string{userHomeDir() + "/.composer/vendor/felixfbecker/language-server/bin/php-language-server.php"}})
+	case "intelephense":
+		fallthrough
+	default:
+		client = newLspClient(config{true, "intelephense", []string{"--stdio"}})
+	}
 
 	// start server and block
-	startServer(proc, "8787")
+	startServer(client, "8787")
 }
