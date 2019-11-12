@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	stdlog "log"
 	"os"
 
@@ -26,7 +25,6 @@ func init() {
 
 	logrus.Level, _ = log.ParseLevel("debug")
 	if terminal.IsTerminal(int(os.Stdout.Fd())) {
-		fmt.Println("In a terminal")
 		logrus.Formatter = &log.TextFormatter{ForceColors: false, FullTimestamp: true, TimestampFormat: "Jan 2 15:04:05", CallerPrettyfier: callerPrettyfier}
 	} else {
 		logrus.Formatter = &HtmlFormatter{FullTimestamp: true, TimestampFormat: "15:04:05", CallerPrettyfier: callerPrettyfier}

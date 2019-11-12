@@ -39,7 +39,7 @@ func (r *request) format() string {
 	headers := fmt.Sprintf("Content-Length: %d", len(json)) + EOL +
 		"Content-Type: application/vscode-jsonrpc; charset=utf-8"
 
-	return fmt.Sprintf("%s%s%s%s", headers, EOL, EOL, json)
+	return headers + EOL + EOL + string(json)
 }
 
 func (r request) getMethod() string {
@@ -62,7 +62,7 @@ func (r *notification) format() string {
 	headers := fmt.Sprintf("Content-Length: %d", len(json)) + EOL +
 		"Content-Type: application/vscode-jsonrpc; charset=utf-8"
 
-	return fmt.Sprintf("%s%s%s%s", headers, EOL, EOL, json)
+	return headers + EOL + EOL + string(json)
 }
 
 func (r notification) getMethod() string {
@@ -75,4 +75,24 @@ type response struct {
 	Params KeyValue
 	Result json.RawMessage
 	Error  KeyValue
+}
+
+func (r *response) getBody() KeyValue {
+	return KeyValue{
+		// "id":     r.ID,
+		"method": r.Method,
+		"result": r.Result,
+	}
+}
+
+func (r *response) format() string {
+	body := r.getBody()
+	body["jsonrpc"] = "2.0"
+
+	json, _ := json.Marshal(body)
+
+	headers := fmt.Sprintf("Content-Length: %d", len(json)) + EOL +
+		"Content-Type: application/vscode-jsonrpc; charset=utf-8"
+
+	return headers + EOL + EOL + string(json)
 }

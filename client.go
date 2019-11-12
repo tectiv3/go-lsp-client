@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type config struct {
@@ -20,64 +21,89 @@ type config struct {
 }
 
 type lspClient struct {
+	config       config
 	conn         io.ReadWriteCloser
 	reqID        int
 	in           io.ReadCloser
 	out          io.WriteCloser
 	responseChan chan *response
+	crashesCount int
+	sync.Mutex
 }
 
 func newLspClient(config config) *lspClient {
-	client := lspClient{}
+	client := lspClient{config: config}
 	client.reqID = 0
 	client.responseChan = make(chan *response)
 
-	if config.stdio {
-		cmd := exec.Command(config.url, config.params...)
+	client.connectToServer()
+
+	return &client
+}
+
+func (p *lspClient) connectToServer() {
+	if p.config.stdio {
+		cmd := exec.Command(p.config.url, p.config.params...)
 
 		stdin, err := cmd.StdinPipe()
 		checkError(err)
-		client.out = stdin
+		p.out = stdin
 
 		stdout, err := cmd.StdoutPipe()
 		checkError(err)
-		client.in = stdout
+		p.in = stdout
 
 		stderr, err := cmd.StderrPipe()
 		checkError(err)
-		go client.readPipe(stderr)
+		go p.readPipe(stderr)
 
 		if err := cmd.Start(); err != nil {
 			checkError(err)
 		}
 		go func() {
-			checkError(cmd.Wait())
+			if err := cmd.Wait(); err != nil {
+				p.crashesCount++
+				if p.crashesCount == 10 {
+					checkError(err)
+				}
+				Log.WithField("err", err).Info("Restarting server after a crash...")
+				go p.connectToServer()
+				p.responseChan <- &response{Method: "restart"}
+			}
 		}()
 	} else {
-		conn, err := net.Dial("tcp", config.url)
+		conn, err := net.Dial("tcp", p.config.url)
 		checkError(err)
-		client.in = conn
-		client.out = conn
+		p.in = conn
+		p.out = conn
 	}
 
-	go client.listen()
-
-	return &client
+	go p.listen()
 }
 
 func (p *lspClient) listen() {
 	Log.Info("Listening for messages, ^c to exit")
 	for {
-		if msg := p.receive(); msg != nil {
+		msg, err := p.receive()
+		if err != nil {
+			Log.Error(err)
+			break
+		}
+		if msg != nil {
 			go p.processMessage(msg)
 		}
 	}
+	Log.Info("Listener finished")
 }
 
 func (p *lspClient) readPipe(conn io.ReadCloser) {
 	reader := bufio.NewReader(conn)
 	for {
-		b, _ := reader.ReadByte()
+		b, err := reader.ReadByte()
+		if err != nil {
+			Log.Error(err)
+			return
+		}
 		if reader.Buffered() > 0 {
 			var msgData []byte
 			msgData = append(msgData, b)
@@ -108,25 +134,43 @@ func (p *lspClient) processMessage(r *response) {
 }
 
 func (p *lspClient) request(id int, method string, params interface{}) {
+	p.Lock()
+	defer p.Unlock()
 	r := request{id, method, params}
+	Log.Info(method)
 	p.send(r.format())
 }
 
 func (p *lspClient) notification(method string, params interface{}) {
+	p.Lock()
+	defer p.Unlock()
 	n := notification{method, params}
+	Log.Info(method)
 	p.send(n.format())
+}
+
+func (p *lspClient) response(id int, method string, res interface{}) {
+	p.Lock()
+	defer p.Unlock()
+	result, _ := json.Marshal(res)
+	r := response{ID: id, Method: method, Result: result}
+	Log.Info(method)
+	p.send(r.format())
 }
 
 func (p *lspClient) send(msg string) {
 	Log.Trace(msg)
-	fmt.Fprintf(p.out, msg)
+	fmt.Fprint(p.out, msg)
 }
 
-func (p *lspClient) receive() *response {
+func (p *lspClient) receive() (*response, error) {
 	reader := bufio.NewReader(p.in)
 	for {
 		str, err := reader.ReadString('\n')
-		checkError(err)
+		if err != nil {
+			Log.Error(err)
+			return nil, err
+		}
 		Log.Trace(str)
 
 		tp := textproto.NewReader(bufio.NewReader(strings.NewReader(str + "\n")))
@@ -138,21 +182,27 @@ func (p *lspClient) receive() *response {
 
 		if l, ok := mimeHeader["Content-Length"]; ok {
 			_, err := reader.ReadString('\n')
-			checkError(err)
+			if err != nil {
+				Log.Error(err)
+				break
+			}
 
 			jsonLen, _ := strconv.ParseInt(l[0], 10, 32)
 
 			buf := make([]byte, jsonLen)
 			_, err = io.ReadFull(reader, buf)
-			checkError(err)
+			if err != nil {
+				Log.Error(err)
+				break
+			}
 			Log.Trace(string(buf))
 
 			response := response{}
 			if err := json.Unmarshal(buf, &response); err != nil {
 				Log.WithField("err", err).Warn(string(buf))
 			}
-			return &response
+			return &response, nil
 		}
 	}
-	return nil
+	return nil, nil
 }

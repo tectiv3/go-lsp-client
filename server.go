@@ -13,7 +13,7 @@ import (
 	"github.com/tectiv3/go-lsp-client/events"
 )
 
-const cacheTime = 10 * time.Minute
+const cacheTime = 30 * time.Second
 
 type mateRequest struct {
 	Method string
@@ -22,6 +22,7 @@ type mateRequest struct {
 
 type mateServer struct {
 	client      *lspClient
+	openFiles   map[string]time.Time
 	requestID   int
 	initialized bool
 	sync.Mutex
@@ -62,6 +63,9 @@ func (s *mateServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	select {
 	case <-tick:
 		w.WriteHeader(http.StatusGatewayTimeout)
+		w.Header().Set("Content-Type", "application/json")
+		Log.WithField("method", mr.Method).Warn("Time out")
+		json.NewEncoder(w).Encode(KeyValue{"result": "error", "message": "time out"})
 		return
 	case result = <-resultChan:
 	}
@@ -82,25 +86,21 @@ func (s *mateServer) requestAndWait(method string, params interface{}, cb kvChan
 	s.requestID++
 	reqID := s.requestID
 	s.Unlock()
-	// subscribe to response
 	timer := time.NewTimer(10 * time.Second)
-	listener := func(event string, payload ...interface{}) {
+
+	events.Once("request."+strconv.Itoa(reqID), func(event string, payload ...interface{}) {
 		timer.Stop()
 		cb <- &KeyValue{"result": payload[0]}
-	}
-
-	events.Once("request."+strconv.Itoa(reqID), listener)
+	})
 	s.client.request(reqID, method, params)
 
 	// block until got response or timeout
 	select {
 	case <-timer.C:
+		Log.WithField("method", method).Warn(" request " + strconv.Itoa(reqID) + " timed out")
+		cb <- &KeyValue{"result": "error", "message": method + " request " + strconv.Itoa(reqID) + " timed out"}
 		timer.Stop()
-		events.RemoveListener("request."+strconv.Itoa(reqID), listener)
-		cb <- &KeyValue{"result": "error", "message": method + " request time out"}
-		return
-	default:
-		timer.Stop()
+		events.RemoveAllListeners("request." + strconv.Itoa(reqID))
 	}
 }
 
@@ -169,6 +169,8 @@ func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 			timer.Stop()
 		}
 	case "didOpen":
+		s.Lock()
+		defer s.Unlock()
 		textDocument := TextDocumentItem{}
 		if err := json.Unmarshal(mr.Body, &textDocument); err != nil {
 			cb <- &KeyValue{"result": "error", "message": err.Error()}
@@ -180,10 +182,34 @@ func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 			cb <- &KeyValue{"result": "error", "message": "Invalid document uri"}
 			return
 		}
-		s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
-			DocumentURI(fn),
-		}})
+
+		if _, ok := s.openFiles[fn]; ok {
+			s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
+				DocumentURI(fn),
+			}})
+			time.Sleep(50 * time.Millisecond)
+		}
 		s.client.notification("textDocument/didOpen", DidOpenTextDocumentParams{textDocument})
+		s.openFiles[fn] = time.Now()
+		cb <- &KeyValue{"result": "ok"}
+	case "didClose":
+		s.Lock()
+		defer s.Unlock()
+		textDocument := TextDocumentIdentifier{}
+		if err := json.Unmarshal(mr.Body, &textDocument); err != nil {
+			cb <- &KeyValue{"result": "error", "message": err.Error()}
+			return
+		}
+
+		fn := string(textDocument.URI)
+		if len(fn) == 0 {
+			cb <- &KeyValue{"result": "error", "message": "Invalid document uri"}
+			return
+		}
+		s.client.notification("textDocument/didClose", DocumentSymbolParams{textDocument})
+		if _, ok := s.openFiles[fn]; ok {
+			delete(s.openFiles, fn)
+		}
 		cb <- &KeyValue{"result": "ok"}
 	default:
 		cb <- &KeyValue{"result": "error", "message": "unknown method"}
@@ -193,19 +219,176 @@ func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 func (s *mateServer) startListeners() {
 	defer s.handlePanic(mateRequest{})
 
-	events.Once("request.1", func(event string, payload ...interface{}) {
+	events.On("request.1", func(event string, payload ...interface{}) {
 		s.client.notification("initialized", KeyValue{})
 		s.client.notification("workspace/didChangeConfiguration", DidChangeConfigurationParams{
 			KeyValue{"intelephense.files.maxSize": 3000000},
 		})
 		events.Emit("initialized")
 	})
+	timer := time.NewTicker(30 * time.Second)
 
 	for {
 		select {
 		case r := <-s.client.responseChan:
-			Log.WithField("id", r.ID).WithField("r", r).Trace(string(r.Result))
-			events.Emit("request."+strconv.Itoa(r.ID), r.Result)
+			switch r.Method {
+			case "restart":
+				s.initialized = false
+				s.openFiles = make(map[string]time.Time)
+			case "client/registerCapability":
+				s.client.notification("client/registerCapability", KeyValue{})
+			case "workspace/configuration":
+				// temporary
+				cfg := KeyValue{
+					"files": KeyValue{
+						"maxSize":      300000,
+						"associations": []string{"*.php", "*.phtml"},
+						"exclude": []string{
+							"**/.git/**",
+							"**/.svn/**",
+							"**/.hg/**",
+							"**/CVS/**",
+							"**/.DS_Store/**",
+							"**/node_modules/**",
+							"**/bower_components/**",
+							"**/vendor/**/{Test,test,Tests,tests}/**",
+							"**/.git",
+							"**/.svn",
+							"**/.hg",
+							"**/CVS",
+							"**/.DS_Store",
+							"**/nova/tests/**",
+							"**/faker/**",
+							"**/*.log",
+							"**/*.log*",
+							"**/*.min.*",
+							"**/dist",
+							"**/coverage",
+							"**/build/*",
+							"**/nova/public/*",
+							"**/public/*",
+						},
+					},
+					"stubs": []string{
+						"apache",
+						"bcmath",
+						"bz2",
+						"calendar",
+						"com_dotnet",
+						"Core",
+						"ctype",
+						"curl",
+						"date",
+						"dba",
+						"dom",
+						"enchant",
+						"exif",
+						"fileinfo",
+						"filter",
+						"fpm",
+						"ftp",
+						"gd",
+						"hash",
+						"iconv",
+						"imap",
+						"interbase",
+						"intl",
+						"json",
+						"ldap",
+						"libxml",
+						"mbstring",
+						"mcrypt",
+						"meta",
+						"mssql",
+						"mysqli",
+						"oci8",
+						"odbc",
+						"openssl",
+						"pcntl",
+						"pcre",
+						"PDO",
+						"pdo_ibm",
+						"pdo_mysql",
+						"pdo_pgsql",
+						"pdo_sqlite",
+						"pgsql",
+						"Phar",
+						"posix",
+						"pspell",
+						"readline",
+						"recode",
+						"Reflection",
+						"regex",
+						"session",
+						"shmop",
+						"SimpleXML",
+						"snmp",
+						"soap",
+						"sockets",
+						"sodium",
+						"SPL",
+						"sqlite3",
+						"standard",
+						"superglobals",
+						"sybase",
+						"sysvmsg",
+						"sysvsem",
+						"sysvshm",
+						"tidy",
+						"tokenizer",
+						"wddx",
+						"xml",
+						"xmlreader",
+						"xmlrpc",
+						"xmlwriter",
+						"Zend OPcache",
+						"zip",
+						"zlib",
+					},
+					"completion": KeyValue{
+						"insertUseDeclaration":                    true,
+						"fullyQualifyGlobalConstantsAndFunctions": false,
+						"triggerParameterHints":                   true,
+						"maxItems":                                100,
+					},
+					"format": KeyValue{
+						"enable": false,
+					},
+					"environment": KeyValue{
+						"documentRoot": "",
+						"includePaths": []string{},
+					},
+					"runtime":   "",
+					"maxMemory": 0,
+					"telemetry": KeyValue{"enabled": false},
+					"trace": KeyValue{
+						"server": "verbose",
+					},
+				}
+				s.client.response(r.ID, "workspace/configuration", []KeyValue{
+					cfg,
+					cfg,
+				})
+			default:
+				events.Emit("request."+strconv.Itoa(r.ID), r.Result)
+			}
+		case <-timer.C:
+			go s.cleanOpenFiles()
+		}
+	}
+}
+
+func (s *mateServer) cleanOpenFiles() {
+	s.Lock()
+	defer s.Unlock()
+	if len(s.openFiles) == 0 {
+		return
+	}
+	Log.Trace("Cleaning open files...")
+	for fn, openTime := range s.openFiles {
+		if time.Since(openTime).Seconds() > cacheTime.Seconds() {
+			delete(s.openFiles, fn)
+			s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{DocumentURI(fn)}})
 		}
 	}
 }
@@ -216,21 +399,22 @@ func (s mateServer) initialize(params KeyValue) error {
 		return errors.New("Empty dir")
 	}
 	storagePath := params.string("storage", "/tmp/intelephense/")
+	name := params.string("name", "phpProject")
 
 	s.client.request(1, "initialize", InitializeParams{
-		ProcessID: os.Getpid(),
-		RootURI:   DocumentURI("file://" + dir),
-		RootPath:  dir,
-		InitializationOptions: KeyValue{
-			"storagePath":   storagePath,
-			"files.maxSize": 3000000,
-		},
+		ProcessID:             os.Getpid(),
+		RootURI:               DocumentURI("file://" + dir),
+		RootPath:              dir,
+		InitializationOptions: KeyValue{"storagePath": storagePath, "clearCache": false},
 		Capabilities: KeyValue{
 			"textDocument": KeyValue{
 				"synchronization": KeyValue{
-					"didSave":           true,
-					"willSaveWaitUntil": true,
+					"dynamicRegistration": true,
+					"didSave":             true,
+					"willSaveWaitUntil":   false,
+					"willSave":            true,
 				},
+				"publishDiagnostics": KeyValue{},
 				"completion": KeyValue{
 					"dynamicRegistration": true,
 					"contextSupport":      true,
@@ -241,10 +425,47 @@ func (s mateServer) initialize(params KeyValue) error {
 						"deprecatedSupport":       true,
 						"preselectSupport":        true,
 					},
+					"completionItemKind": KeyValue{
+						"valueSet": []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25},
+					},
 				},
 				"hover": KeyValue{
 					"dynamicRegistration": true,
 					"contentFormat":       []string{"markdown", "plaintext"},
+				},
+				"signatureHelp": KeyValue{
+					"dynamicRegistration": true,
+					"signatureInformation": KeyValue{
+						"documentationFormat":  []string{"markdown", "plaintext"},
+						"parameterInformation": KeyValue{"labelOffsetSupport": true},
+					},
+				},
+				"codeLens":         KeyValue{"dynamicRegistration": true},
+				"formatting":       KeyValue{"dynamicRegistration": true},
+				"rangeFormatting":  KeyValue{"dynamicRegistration": true},
+				"onTypeFormatting": KeyValue{"dynamicRegistration": true},
+				"rename": KeyValue{
+					"dynamicRegistration": true,
+					"prepareSupport":      true,
+				},
+				"documentLink": KeyValue{"dynamicRegistration": true},
+				"typeDefinition": KeyValue{
+					"dynamicRegistration": true,
+					"linkSupport":         true,
+				},
+				"implementation": KeyValue{
+					"dynamicRegistration": true,
+					"linkSupport":         true,
+				},
+				"colorProvider": KeyValue{"dynamicRegistration": true},
+				"foldingRange": KeyValue{
+					"dynamicRegistration": true,
+					"rangeLimit":          5000,
+					"lineFoldingOnly":     true,
+				},
+				"declaration": KeyValue{
+					"dynamicRegistration": true,
+					"linkSupport":         true,
 				},
 			},
 
@@ -252,11 +473,25 @@ func (s mateServer) initialize(params KeyValue) error {
 				"applyEdit":              true,
 				"didChangeConfiguration": KeyValue{"dynamicRegistration": true},
 				"configuration":          true,
-				"executeCommand":         KeyValue{},
+				"executeCommand":         KeyValue{"dynamicRegistration": true},
+				"workspaceFolders":       true,
 				"symbol": KeyValue{
+					"dynamicRegistration": true,
 					"symbolKind": KeyValue{
-						"valueSet": []int{1, 2, 3, 4, 5, 6, 7, 8},
+						"valueSet": []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25},
 					},
+				},
+				"workspaceEdit": KeyValue{
+					"documentChanges":    true,
+					"resourceOperations": []string{"create", "rename", "delete"},
+					"failureHandling":    "textOnlyTransactional",
+				},
+				"didChangeWatchedFiles": KeyValue{"dynamicRegistration": true},
+			},
+			"workspaceFolders": []KeyValue{
+				KeyValue{
+					"uri":  "file://" + dir,
+					"name": name,
 				},
 			},
 		},
@@ -272,7 +507,7 @@ func (s mateServer) handlePanic(mr mateRequest) {
 
 func startServer(client *lspClient, port string) {
 	Log.Info("Running webserver on port " + port)
-	server := mateServer{client: client, requestID: 1, initialized: false}
+	server := mateServer{client: client, openFiles: make(map[string]time.Time), requestID: 1, initialized: false}
 	go server.startListeners()
 
 	Log.Fatal(http.ListenAndServe(":"+port, &server))
