@@ -12,9 +12,8 @@ import (
 
 var (
 	// Log is a global logrus instance
-	Log     *log.Entry
-	logrus  = log.New()
-	version = "master"
+	Log    *log.Entry
+	logrus = log.New()
 )
 
 var (

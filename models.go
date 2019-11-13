@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-type callbackFunc func(r *response)
 type kvChan chan *KeyValue
 
 // KeyValue is basic key:value struct
@@ -141,13 +140,6 @@ type Diagnostic struct {
 
 type DiagnosticSeverity int
 
-const (
-	Error       DiagnosticSeverity = 1
-	Warning                        = 2
-	Information                    = 3
-	Hint                           = 4
-)
-
 type Command struct {
 	/**
 	 * Title of the command, like `save`.
@@ -228,7 +220,6 @@ type TextDocumentPositionParams struct {
 	Position Position `json:"position"`
 }
 
-type None struct{}
 type DocumentURI string
 
 type InitializeParams struct {
@@ -251,14 +242,6 @@ func (p *InitializeParams) Root() DocumentURI {
 		return DocumentURI(p.RootPath)
 	}
 	return DocumentURI("file://" + p.RootPath)
-}
-
-type InitializeResult struct {
-	Capabilities KeyValue `json:"capabilities,omitempty"`
-}
-
-type InitializeError struct {
-	Retry bool `json:"retry"`
 }
 
 type CompletionOptions struct {
@@ -628,8 +611,8 @@ type DidChangeTextDocumentParams struct {
 }
 
 type TextDocumentContentChangeEvent struct {
-	Range       *Range `json:"range,omitEmpty"`
-	RangeLength uint   `json:"rangeLength,omitEmpty"`
+	Range       *Range `json:"range,omitempty"`
+	RangeLength uint   `json:"rangeLength,omitempty"`
 	Text        string `json:"text"`
 }
 
@@ -639,35 +622,6 @@ type DidCloseTextDocumentParams struct {
 
 type DidSaveTextDocumentParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
-}
-
-type MessageType int
-
-const (
-	MTError     MessageType = 1
-	MTWarning               = 2
-	InfoMessage             = 3
-	LogMessage              = 4
-)
-
-type ShowMessageParams struct {
-	Type    MessageType `json:"type"`
-	Message string      `json:"message"`
-}
-
-type MessageActionItem struct {
-	Title string `json:"title"`
-}
-
-type ShowMessageRequestParams struct {
-	Type    MessageType         `json:"type"`
-	Message string              `json:"message"`
-	Actions []MessageActionItem `json:"actions"`
-}
-
-type LogMessageParams struct {
-	Type    MessageType `json:"type"`
-	Message string      `json:"message"`
 }
 
 type DidChangeConfigurationParams struct {

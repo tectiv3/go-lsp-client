@@ -22,7 +22,6 @@ type config struct {
 
 type lspClient struct {
 	config       config
-	conn         io.ReadWriteCloser
 	reqID        int
 	in           io.ReadCloser
 	out          io.WriteCloser

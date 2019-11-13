@@ -54,8 +54,7 @@ func (s *mateServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resultChan := make(kvChan)
 	var result *KeyValue
-	var tick <-chan time.Time
-	tick = time.After(20 * time.Second)
+	tick := time.After(20 * time.Second)
 
 	go s.processRequest(mr, resultChan)
 
@@ -391,7 +390,7 @@ func (s *mateServer) cleanOpenFiles() {
 	}
 }
 
-func (s mateServer) initialize(params KeyValue) error {
+func (s *mateServer) initialize(params KeyValue) error {
 	dir := params.string("dir", "")
 	if len(dir) == 0 {
 		return errors.New("Empty dir")
@@ -497,7 +496,7 @@ func (s mateServer) initialize(params KeyValue) error {
 	return nil
 }
 
-func (s mateServer) handlePanic(mr mateRequest) {
+func (s *mateServer) handlePanic(mr mateRequest) {
 	if err := recover(); err != nil {
 		Log.WithField("method", mr.Method).WithField("bt", string(debug.Stack())).Error("Recovered from:", err)
 	}

@@ -152,7 +152,7 @@ func (e *emitter) Emit(evt string, data ...interface{}) {
 	if e.evtListeners == nil {
 		return // has no listeners to emit/speak yet
 	}
-	if listeners, ok := e.evtListeners[evt]; ok && len(listeners) > 0 {
+	if listeners, ok := e.evtListeners[evt]; ok {
 		for i := range listeners {
 			l := listeners[i]
 			if l != nil {
@@ -230,7 +230,7 @@ func (e *emitter) ListenerCount(evt string) int {
 	}
 	len := 0
 
-	if evtListeners := e.evtListeners[evt]; evtListeners != nil { // len() should be just fine, but for any case on future...
+	if evtListeners, ok := e.evtListeners[evt]; ok {
 		for _, l := range evtListeners {
 			if l == nil {
 				continue
@@ -252,8 +252,7 @@ func (e *emitter) Listeners(evt string) []Listener {
 		return nil
 	}
 	var listeners []Listener
-	if evtListeners := e.evtListeners[evt]; evtListeners != nil {
-		// do not pass any inactive/removed listeners(nil)
+	if evtListeners, ok := e.evtListeners[evt]; ok {
 		for _, l := range evtListeners {
 			if l == nil {
 				continue
