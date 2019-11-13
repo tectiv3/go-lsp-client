@@ -11,6 +11,7 @@ import (
 )
 
 var (
+	// Log is a global logrus instance
 	Log     *log.Entry
 	logrus  = log.New()
 	version = "master"
@@ -34,7 +35,7 @@ func init() {
 	if terminal.IsTerminal(int(os.Stdout.Fd())) {
 		logrus.Formatter = &log.TextFormatter{ForceColors: false, FullTimestamp: true, TimestampFormat: "Jan 2 15:04:05", CallerPrettyfier: callerPrettyfier}
 	} else {
-		logrus.Formatter = &HtmlFormatter{FullTimestamp: true, TimestampFormat: "15:04:05", CallerPrettyfier: callerPrettyfier}
+		logrus.Formatter = &HTMLFormatter{FullTimestamp: true, TimestampFormat: "15:04:05", CallerPrettyfier: callerPrettyfier}
 	}
 }
 

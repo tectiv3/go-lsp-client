@@ -7,19 +7,19 @@ import (
 
 var testEvents = Events{
 	"user_created": []Listener{
-		func(payload ...interface{}) {
+		func(event string, payload ...interface{}) {
 			fmt.Printf("A new User just created!\n")
 		},
-		func(payload ...interface{}) {
+		func(event string, payload ...interface{}) {
 			fmt.Printf("A new User just created, *from second event listener\n")
 		},
 	},
-	"user_joined": []Listener{func(payload ...interface{}) {
+	"user_joined": []Listener{func(event string, payload ...interface{}) {
 		user := payload[0].(string)
 		room := payload[1].(string)
 		fmt.Printf("%s joined to room: %s\n", user, room)
 	}},
-	"user_left": []Listener{func(payload ...interface{}) {
+	"user_left": []Listener{func(event string, payload ...interface{}) {
 		user := payload[0].(string)
 		room := payload[1].(string)
 		fmt.Printf("%s left from the room: %s\n", user, room)
@@ -62,7 +62,7 @@ func TestEvents(t *testing.T) {
 	e := New()
 	expectedPayload := "this is my payload"
 
-	e.On("my_event", func(payload ...interface{}) {
+	e.On("my_event", func(event string, payload ...interface{}) {
 		if len(payload) <= 0 {
 			t.Fatal("Expected payload but got nothing")
 		}
@@ -98,7 +98,7 @@ func TestEventsOnce(t *testing.T) {
 	Clear()
 
 	var count = 0
-	Once("my_event", func(payload ...interface{}) {
+	Once("my_event", func(event string, payload ...interface{}) {
 		if count > 0 {
 			t.Fatalf("Once's listener fired more than one time! count: %d", count)
 		}
@@ -132,7 +132,7 @@ func TestRemoveListener(t *testing.T) {
 	e := New()
 
 	var count = 0
-	listener := func(payload ...interface{}) {
+	listener := func(event string, payload ...interface{}) {
 		if count > 1 {
 			t.Fatal("Event listener should be removed")
 		}
@@ -141,8 +141,8 @@ func TestRemoveListener(t *testing.T) {
 	}
 
 	e.AddListener("my_event", listener)
-	e.AddListener("my_event", func(payload ...interface{}) {})
-	e.AddListener("another_event", func(payload ...interface{}) {})
+	e.AddListener("my_event", func(event string, payload ...interface{}) {})
+	e.AddListener("another_event", func(event string, payload ...interface{}) {})
 
 	e.Emit("my_event")
 

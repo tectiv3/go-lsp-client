@@ -10,6 +10,7 @@ import (
 type callbackFunc func(r *response)
 type kvChan chan *KeyValue
 
+// KeyValue is basic key:value struct
 type KeyValue map[string]interface{}
 
 // bool returns the value of the given name, assuming the value is a boolean.

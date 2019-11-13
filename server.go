@@ -95,13 +95,11 @@ func (s *mateServer) requestAndWait(method string, params interface{}, cb kvChan
 	s.client.request(reqID, method, params)
 
 	// block until got response or timeout
-	select {
-	case <-timer.C:
-		Log.WithField("method", method).Warn(" request " + strconv.Itoa(reqID) + " timed out")
-		cb <- &KeyValue{"result": "error", "message": method + " request " + strconv.Itoa(reqID) + " timed out"}
-		timer.Stop()
-		events.RemoveAllListeners("request." + strconv.Itoa(reqID))
-	}
+	<-timer.C
+	Log.WithField("method", method).Warn(" request " + strconv.Itoa(reqID) + " timed out")
+	cb <- &KeyValue{"result": "error", "message": method + " request " + strconv.Itoa(reqID) + " timed out"}
+	timer.Stop()
+	events.RemoveAllListeners("request." + strconv.Itoa(reqID))
 }
 
 func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {

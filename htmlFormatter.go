@@ -27,8 +27,8 @@ func init() {
 	baseTimestamp = time.Now()
 }
 
-// HtmlFormatter formats logs into text
-type HtmlFormatter struct {
+// HTMLFormatter formats logs into text
+type HTMLFormatter struct {
 	// Force disabling colors.
 	DisableColors bool
 
@@ -62,7 +62,7 @@ type HtmlFormatter struct {
 
 	// FieldMap allows users to customize the names of keys for default fields.
 	// As an example:
-	// formatter := &HtmlFormatter{
+	// formatter := &HTMLFormatter{
 	//     FieldMap: FieldMap{
 	//         FieldKeyTime:  "@timestamp",
 	//         FieldKeyLevel: "@level",
@@ -78,16 +78,16 @@ type HtmlFormatter struct {
 	terminalInitOnce sync.Once
 }
 
-func (f *HtmlFormatter) init(entry *log.Entry) {
+func (f *HTMLFormatter) init(entry *log.Entry) {
 	fmt.Fprint(entry.Buffer, "<table>")
 }
 
-func (f *HtmlFormatter) isColored() bool {
+func (f *HTMLFormatter) isColored() bool {
 	return !f.DisableColors
 }
 
 // Format renders a single log entry
-func (f *HtmlFormatter) Format(entry *log.Entry) ([]byte, error) {
+func (f *HTMLFormatter) Format(entry *log.Entry) ([]byte, error) {
 	data := make(log.Fields)
 	for k, v := range entry.Data {
 		data[k] = v
@@ -187,7 +187,7 @@ func (f *HtmlFormatter) Format(entry *log.Entry) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func (f *HtmlFormatter) printColored(b *bytes.Buffer, entry *log.Entry, keys []string, data log.Fields, timestampFormat string) {
+func (f *HTMLFormatter) printColored(b *bytes.Buffer, entry *log.Entry, keys []string, data log.Fields, timestampFormat string) {
 	var levelColor string
 	switch entry.Level {
 	case log.DebugLevel, log.TraceLevel:
@@ -227,7 +227,7 @@ func (f *HtmlFormatter) printColored(b *bytes.Buffer, entry *log.Entry, keys []s
 	if f.DisableTimestamp {
 		fmt.Fprintf(b, "<td>%s</td><td>%s</td><td>%s</td>", levelText, caller, entry.Message)
 	} else if !f.FullTimestamp {
-		fmt.Fprintf(b, "<td>%s</td><td>%s</td><td>%s</td><td>%s</td>", levelText, int(entry.Time.Sub(baseTimestamp)/time.Second), caller, html.EscapeString(entry.Message))
+		fmt.Fprintf(b, "<td>%s</td><td>%d</td><td>%s</td><td>%s</td>", levelText, int(entry.Time.Sub(baseTimestamp)/time.Second), caller, html.EscapeString(entry.Message))
 	} else {
 		if entry.Level == log.DebugLevel || entry.Level == log.TraceLevel {
 			fmt.Fprintf(b, "<td style=\"color:%s\">%s</td><td>%s</td><td>%s</td><td><pre style=\"padding: 0 5px 0 5px;margin-bottom: 0;color:%s\">%s</pre></td>", levelColor, levelText, entry.Time.Format(timestampFormat), caller, levelColor, html.EscapeString(entry.Message))
@@ -249,7 +249,7 @@ func (f *HtmlFormatter) printColored(b *bytes.Buffer, entry *log.Entry, keys []s
 	fmt.Fprint(b, "</tr>")
 }
 
-func (f *HtmlFormatter) needsQuoting(text string) bool {
+func (f *HTMLFormatter) needsQuoting(text string) bool {
 	if f.ForceQuote {
 		return true
 	}
@@ -267,7 +267,7 @@ func (f *HtmlFormatter) needsQuoting(text string) bool {
 	return false
 }
 
-func (f *HtmlFormatter) appendKeyValue(b *bytes.Buffer, key string, value interface{}) {
+func (f *HTMLFormatter) appendKeyValue(b *bytes.Buffer, key string, value interface{}) {
 	if b.Len() > 0 {
 		b.WriteByte(' ')
 	}
@@ -277,7 +277,7 @@ func (f *HtmlFormatter) appendKeyValue(b *bytes.Buffer, key string, value interf
 	b.WriteString(vs)
 }
 
-func (f *HtmlFormatter) getValueString(value interface{}) string {
+func (f *HTMLFormatter) getValueString(value interface{}) string {
 	stringVal, ok := value.(string)
 	if !ok {
 		stringVal = fmt.Sprint(value)
@@ -286,7 +286,6 @@ func (f *HtmlFormatter) getValueString(value interface{}) string {
 
 	if !f.needsQuoting(stringVal) {
 		return stringVal
-	} else {
-		return fmt.Sprintf("%q", stringVal)
 	}
+	return fmt.Sprintf("%q", stringVal)
 }
