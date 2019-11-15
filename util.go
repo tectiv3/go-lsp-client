@@ -7,7 +7,27 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"time"
 )
+
+const megabyte = 1024 * 1024
+
+func runProfiler() {
+	m := &runtime.MemStats{}
+
+	for {
+		runtime.ReadMemStats(m)
+
+		Log.Tracef(
+			"goroutines: %v, mem used: %v MB, mem acquired: %v MB. GC runs: %v, GC paused: %v ns",
+			runtime.NumGoroutine(),
+			m.Alloc/megabyte, m.Sys/megabyte,
+			m.NumGC, m.PauseTotalNs,
+		)
+
+		time.Sleep(time.Second * 10)
+	}
+}
 
 // Panicf takes the return value of recover() and outputs data to the log with
 // the stack trace appended. Arguments are handled in the manner of

@@ -124,7 +124,7 @@ type Diagnostic struct {
 	/**
 	 * The diagnostic's code. Can be omitted.
 	 */
-	Code string `json:"code,omitempty"`
+	Code int `json:"code,omitempty"`
 
 	/**
 	 * A human-readable string describing the source of this

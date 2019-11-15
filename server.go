@@ -85,20 +85,32 @@ func (s *mateServer) requestAndWait(method string, params interface{}, cb kvChan
 	s.requestID++
 	reqID := s.requestID
 	s.Unlock()
-	timer := time.NewTimer(10 * time.Second)
 
-	events.Once("request."+strconv.Itoa(reqID), func(event string, payload ...interface{}) {
+	s.client.request(reqID, method, params)
+	// block until got response or timeout
+	s.wait("request."+strconv.Itoa(reqID), cb)
+}
+
+func (s *mateServer) wait(event string, cb kvChan) {
+	timer := time.NewTimer(4 * time.Second)
+	var canceled = make(chan struct{})
+
+	events.Once(event, func(event string, payload ...interface{}) {
+		Log.Trace(event + " wait once")
 		timer.Stop()
+		canceled <- struct{}{}
 		cb <- &KeyValue{"result": payload[0]}
 	})
-	s.client.request(reqID, method, params)
 
-	// block until got response or timeout
-	<-timer.C
-	Log.WithField("method", method).Warn(" request " + strconv.Itoa(reqID) + " timed out")
-	cb <- &KeyValue{"result": "error", "message": method + " request " + strconv.Itoa(reqID) + " timed out"}
-	timer.Stop()
-	events.RemoveAllListeners("request." + strconv.Itoa(reqID))
+	select {
+	case <-timer.C:
+		Log.Warn(event + " timed out")
+		cb <- &KeyValue{"result": "error", "message": event + " timed out"}
+		timer.Stop()
+		events.RemoveAllListeners(event)
+		return
+	case <-canceled:
+	}
 }
 
 func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
@@ -127,89 +139,101 @@ func (s *mateServer) processRequest(mr mateRequest, cb kvChan) {
 		}
 		s.requestAndWait("textDocument/definition", params, cb)
 	case "initialize":
-		s.Lock()
-		defer s.Unlock()
-		if s.initialized {
-			cb <- &KeyValue{"result": "ok", "message": "already initialized"}
-			return
-		}
-		params := KeyValue{}
-		if err := json.Unmarshal(mr.Body, &params); err != nil {
-			cb <- &KeyValue{"result": "error", "message": err.Error()}
-			return
-		}
-
-		timer := time.NewTimer(10 * time.Second)
-		s.initialize(params)
-
-		// subscribe to initialized response and wait for it
-		listener := func(event string, payload ...interface{}) {
-			timer.Stop()
-			s.initialized = true
-			cb <- &KeyValue{"result": "ok"}
-		}
-		events.Once("initialized", listener)
-
-		// block until got response for initialized or timeout
-		select {
-		case <-timer.C:
-			timer.Stop()
-			s.initialized = true
-			events.RemoveListener("initialized", listener)
-			s.client.notification("initialized", KeyValue{}) // notify server that we are ready
-			s.client.notification("workspace/didChangeConfiguration", DidChangeConfigurationParams{
-				KeyValue{"intelephense.files.maxSize": 3000000},
-			})
-			cb <- &KeyValue{"result": "ok"}
-			return
-		default:
-			timer.Stop()
-		}
+		s.onInitialize(mr, cb)
 	case "didOpen":
-		s.Lock()
-		defer s.Unlock()
-		textDocument := TextDocumentItem{}
-		if err := json.Unmarshal(mr.Body, &textDocument); err != nil {
-			cb <- &KeyValue{"result": "error", "message": err.Error()}
-			return
-		}
-
-		fn := string(textDocument.URI)
-		if len(fn) == 0 {
-			cb <- &KeyValue{"result": "error", "message": "Invalid document uri"}
-			return
-		}
-
-		if _, ok := s.openFiles[fn]; ok {
-			s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
-				DocumentURI(fn),
-			}})
-			time.Sleep(50 * time.Millisecond)
-		}
-		s.client.notification("textDocument/didOpen", DidOpenTextDocumentParams{textDocument})
-		s.openFiles[fn] = time.Now()
-		cb <- &KeyValue{"result": "ok"}
+		s.onDidOpen(mr, cb)
 	case "didClose":
-		s.Lock()
-		defer s.Unlock()
-		textDocument := TextDocumentIdentifier{}
-		if err := json.Unmarshal(mr.Body, &textDocument); err != nil {
-			cb <- &KeyValue{"result": "error", "message": err.Error()}
-			return
-		}
-
-		fn := string(textDocument.URI)
-		if len(fn) == 0 {
-			cb <- &KeyValue{"result": "error", "message": "Invalid document uri"}
-			return
-		}
-		s.client.notification("textDocument/didClose", DocumentSymbolParams{textDocument})
-		if _, ok := s.openFiles[fn]; ok {
-			delete(s.openFiles, fn)
-		}
-		cb <- &KeyValue{"result": "ok"}
+		s.onDidClose(mr, cb)
 	default:
 		cb <- &KeyValue{"result": "error", "message": "unknown method"}
+	}
+	Log.WithField("method", mr.Method).Trace("processRequest finished")
+}
+
+func (s *mateServer) onDidOpen(mr mateRequest, cb kvChan) {
+	s.Lock()
+	defer s.Unlock()
+	textDocument := TextDocumentItem{}
+	if err := json.Unmarshal(mr.Body, &textDocument); err != nil {
+		cb <- &KeyValue{"result": "error", "message": err.Error()}
+		return
+	}
+
+	fn := string(textDocument.URI)
+	if len(fn) == 0 {
+		cb <- &KeyValue{"result": "error", "message": "Invalid document uri"}
+		return
+	}
+
+	if _, ok := s.openFiles[fn]; ok {
+		s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
+			DocumentURI(fn),
+		}})
+		time.Sleep(100 * time.Millisecond)
+	}
+	s.client.notification("textDocument/didOpen", DidOpenTextDocumentParams{textDocument})
+	s.openFiles[fn] = time.Now()
+	Log.Trace("waiting for diagnostics for " + fn)
+	s.wait("diagnostics."+fn, cb)
+}
+
+func (s *mateServer) onDidClose(mr mateRequest, cb kvChan) {
+	s.Lock()
+	defer s.Unlock()
+	textDocument := TextDocumentIdentifier{}
+	if err := json.Unmarshal(mr.Body, &textDocument); err != nil {
+		cb <- &KeyValue{"result": "error", "message": err.Error()}
+		return
+	}
+
+	fn := string(textDocument.URI)
+	if len(fn) == 0 {
+		cb <- &KeyValue{"result": "error", "message": "Invalid document uri"}
+		return
+	}
+	s.client.notification("textDocument/didClose", DocumentSymbolParams{textDocument})
+	delete(s.openFiles, fn)
+
+	cb <- &KeyValue{"result": "ok"}
+}
+
+func (s *mateServer) onInitialize(mr mateRequest, cb kvChan) {
+	s.Lock()
+	defer s.Unlock()
+	if s.initialized {
+		cb <- &KeyValue{"result": "ok", "message": "already initialized"}
+		return
+	}
+	params := KeyValue{}
+	if err := json.Unmarshal(mr.Body, &params); err != nil {
+		cb <- &KeyValue{"result": "error", "message": err.Error()}
+		return
+	}
+
+	timer := time.NewTimer(10 * time.Second)
+	var canceled = make(chan struct{})
+	s.initialize(params)
+
+	// subscribe to initialized response and wait for it
+	events.Once("initialized", func(event string, payload ...interface{}) {
+		canceled <- struct{}{}
+		timer.Stop()
+		s.initialized = true
+		cb <- &KeyValue{"result": "ok"}
+	})
+
+	// block until got response for initialized or timeout
+	select {
+	case <-timer.C:
+		s.initialized = true
+		events.RemoveAllListeners("initialized")
+		s.client.notification("initialized", KeyValue{}) // notify server that we are ready
+		s.client.notification("workspace/didChangeConfiguration", DidChangeConfigurationParams{
+			KeyValue{"intelephense.files.maxSize": 3000000},
+		})
+		cb <- &KeyValue{"result": "ok"}
+		return
+	case <-canceled:
 	}
 }
 
@@ -234,6 +258,15 @@ func (s *mateServer) startListeners() {
 				s.openFiles = make(map[string]time.Time)
 			case "client/registerCapability":
 				s.client.notification("client/registerCapability", KeyValue{})
+			case "textDocument/publishDiagnostics":
+				jsParams, _ := json.Marshal(r.Params)
+				params := PublishDiagnosticsParams{}
+				if err := json.Unmarshal(jsParams, &params); err != nil {
+					Log.Warn(err)
+				} else {
+					Log.Trace("diagnostics." + string(params.URI))
+					events.Emit("diagnostics."+string(params.URI), params.Diagnostics)
+				}
 			case "workspace/configuration":
 				// temporary
 				cfg := KeyValue{
@@ -397,7 +430,7 @@ func (s *mateServer) initialize(params KeyValue) error {
 	}
 	storagePath := params.string("storage", "/tmp/intelephense/")
 	name := params.string("name", "phpProject")
-
+	Log.WithField("dir", dir).WithField("name", name).Info("Initialize")
 	s.client.request(1, "initialize", InitializeParams{
 		ProcessID:             os.Getpid(),
 		RootURI:               DocumentURI("file://" + dir),

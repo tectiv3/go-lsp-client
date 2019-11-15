@@ -48,7 +48,7 @@ func main() {
 	default:
 		client = newLspClient(config{true, "intelephense", []string{"--stdio"}})
 	}
-
+	go runProfiler()
 	// start server and block
 	startServer(client, "8787")
 }
