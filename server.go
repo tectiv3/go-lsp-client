@@ -13,7 +13,7 @@ import (
 	"github.com/tectiv3/go-lsp-client/events"
 )
 
-const cacheTime = 30 * time.Second
+const cacheTime = 5 * time.Second
 
 type mateRequest struct {
 	Method string
@@ -80,19 +80,24 @@ func (s *mateServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-func (s *mateServer) requestAndWait(method string, params interface{}, cb kvChan) {
+func (s *mateServer) request(method string, params interface{}) int {
 	s.Lock()
 	s.requestID++
 	reqID := s.requestID
 	s.Unlock()
 
 	s.client.request(reqID, method, params)
+	return reqID
+}
+
+func (s *mateServer) requestAndWait(method string, params interface{}, cb kvChan) {
+	reqID := s.request(method, params)
 	// block until got response or timeout
 	s.wait("request."+strconv.Itoa(reqID), cb)
 }
 
 func (s *mateServer) wait(event string, cb kvChan) {
-	timer := time.NewTimer(4 * time.Second)
+	timer := time.NewTimer(2 * time.Second)
 	var canceled = make(chan struct{})
 
 	events.Once(event, func(event string, payload ...interface{}) {
@@ -166,13 +171,16 @@ func (s *mateServer) onDidOpen(mr mateRequest, cb kvChan) {
 	}
 
 	if _, ok := s.openFiles[fn]; ok {
-		s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
-			DocumentURI(fn),
-		}})
-		time.Sleep(100 * time.Millisecond)
+		cb <- &KeyValue{"result": "ok", "message": "already opened"}
+		return
+		// s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
+		//     DocumentURI(fn),
+		// }})
+		// time.Sleep(100 * time.Millisecond)
 	}
-	s.client.notification("textDocument/didOpen", DidOpenTextDocumentParams{textDocument})
 	s.openFiles[fn] = time.Now()
+	s.client.notification("textDocument/didOpen", DidOpenTextDocumentParams{textDocument})
+	go s.request("textDocument/documentSymbol", DidOpenTextDocumentParams{textDocument})
 	Log.Trace("waiting for diagnostics for " + fn)
 	s.wait("diagnostics."+fn, cb)
 }
@@ -264,7 +272,7 @@ func (s *mateServer) startListeners() {
 				if err := json.Unmarshal(jsParams, &params); err != nil {
 					Log.Warn(err)
 				} else {
-					Log.Trace("diagnostics." + string(params.URI))
+					Log.Debug("diagnostics." + string(params.URI))
 					events.Emit("diagnostics."+string(params.URI), params.Diagnostics)
 				}
 			case "workspace/configuration":
