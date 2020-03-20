@@ -170,17 +170,17 @@ func (s *mateServer) onDidOpen(mr mateRequest, cb kvChan) {
 		return
 	}
 
+	go s.request("textDocument/documentSymbol", DidOpenTextDocumentParams{textDocument})
 	if _, ok := s.openFiles[fn]; ok {
-		cb <- &KeyValue{"result": "ok", "message": "already opened"}
-		return
-		// s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
-		//     DocumentURI(fn),
-		// }})
-		// time.Sleep(100 * time.Millisecond)
+		// cb <- &KeyValue{"result": "ok", "message": "already opened"}
+		// return
+		s.client.notification("textDocument/didClose", DocumentSymbolParams{TextDocumentIdentifier{
+			DocumentURI(fn),
+		}})
+		time.Sleep(100 * time.Millisecond)
 	}
 	s.openFiles[fn] = time.Now()
 	s.client.notification("textDocument/didOpen", DidOpenTextDocumentParams{textDocument})
-	go s.request("textDocument/documentSymbol", DidOpenTextDocumentParams{textDocument})
 	Log.Trace("waiting for diagnostics for " + fn)
 	s.wait("diagnostics."+fn, cb)
 }
@@ -255,7 +255,7 @@ func (s *mateServer) startListeners() {
 		})
 		events.Emit("initialized")
 	})
-	timer := time.NewTicker(30 * time.Second)
+	// timer := time.NewTicker(30 * time.Second)
 
 	for {
 		select {
@@ -410,8 +410,8 @@ func (s *mateServer) startListeners() {
 			default:
 				events.Emit("request."+strconv.Itoa(r.ID), r.Result)
 			}
-		case <-timer.C:
-			go s.cleanOpenFiles()
+			// case <-timer.C:
+			// go s.cleanOpenFiles()
 		}
 	}
 }
@@ -432,6 +432,7 @@ func (s *mateServer) cleanOpenFiles() {
 }
 
 func (s *mateServer) initialize(params KeyValue) error {
+	license := params.string("license", "")
 	dir := params.string("dir", "")
 	if len(dir) == 0 {
 		return errors.New("Empty dir")
@@ -443,7 +444,7 @@ func (s *mateServer) initialize(params KeyValue) error {
 		ProcessID:             os.Getpid(),
 		RootURI:               DocumentURI("file://" + dir),
 		RootPath:              dir,
-		InitializationOptions: KeyValue{"storagePath": storagePath, "clearCache": false},
+		InitializationOptions: KeyValue{"storagePath": storagePath, "clearCache": true, "isVscode": true, "licenceKey": license},
 		Capabilities: KeyValue{
 			"textDocument": KeyValue{
 				"synchronization": KeyValue{
@@ -452,7 +453,7 @@ func (s *mateServer) initialize(params KeyValue) error {
 					"willSaveWaitUntil":   false,
 					"willSave":            true,
 				},
-				"publishDiagnostics": KeyValue{},
+				"publishDiagnostics": true,
 				"completion": KeyValue{
 					"dynamicRegistration": true,
 					"contextSupport":      true,
@@ -508,11 +509,11 @@ func (s *mateServer) initialize(params KeyValue) error {
 			},
 
 			"workspace": KeyValue{
-				"applyEdit":              true,
-				"didChangeConfiguration": KeyValue{"dynamicRegistration": true},
-				"configuration":          true,
-				"executeCommand":         KeyValue{"dynamicRegistration": true},
-				"workspaceFolders":       true,
+				"applyEdit": true,
+				// "didChangeConfiguration": KeyValue{"dynamicRegistration": true},
+				// "configuration":    true,
+				"executeCommand":   KeyValue{"dynamicRegistration": true},
+				"workspaceFolders": true,
 				"symbol": KeyValue{
 					"dynamicRegistration": true,
 					"symbolKind": KeyValue{
@@ -524,7 +525,7 @@ func (s *mateServer) initialize(params KeyValue) error {
 					"resourceOperations": []string{"create", "rename", "delete"},
 					"failureHandling":    "textOnlyTransactional",
 				},
-				"didChangeWatchedFiles": KeyValue{"dynamicRegistration": true},
+				"didChangeWatchedFiles": KeyValue{"dynamicRegistration": false},
 			},
 			"workspaceFolders": []KeyValue{
 				KeyValue{
